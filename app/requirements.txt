@@ -1,0 +1,11 @@
+fastapi
+gunicorn
+uvicorn
+asyncpg
+sqlalchemy==1.4.52
+sqlalchemy[asyncio]
+pydantic
+python-multipart
+pytest
+httpx
+sqlalchemy-utils

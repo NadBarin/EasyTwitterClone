@@ -1,0 +1,25 @@
+version: '3.2'
+services:
+  app:
+    build:
+      dockerfile: app/Dockerfile
+    command: gunicorn -k uvicorn.workers.UvicornWorker -b localhost:8080 api.routes:app --reload
+    networks:
+      - network
+    ports:
+      - '8080:8080'
+  db:
+    image: postgres:latest
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: db
+    networks:
+      - network
+    ports:
+      - '5432:5432'
+    volumes:
+      - ./db/:/var/lib/postgresql/data
+networks:
+  network:
