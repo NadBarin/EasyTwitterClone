@@ -30,7 +30,7 @@ async def check_api_key(request: Request,
     session: AsyncSession = Depends(get_db_session)):
     header_value = request.headers.get('api-key')
     if header_value:
-        check_api_k = await session.scalars(select(User.id).where(
+        check_api_k = await session.execute(select(User.id).where(
             User.api_key == header_value))
         res = check_api_k.all()
         if res:
@@ -48,7 +48,7 @@ async def add_new_tweet(data: TweetCreate, request: Request,
     user_id = await check_api_key(request)
     if user_id:
         if data.tweet_media_ids:
-            check_tweet_media = await session.scalars(
+            check_tweet_media = await session.execute(
                 select(Media.id).where(
                     Media.id.in_(data['tweet_media_ids'])))
             insert_into_tweets = insert(Tweets).values(
@@ -59,7 +59,7 @@ async def add_new_tweet(data: TweetCreate, request: Request,
             insert_into_tweets = insert(Tweets).values(
                 content=data.tweet_data,
                 author_id=user_id).returning(Tweets.id)
-        result = await session.scalars(insert_into_tweets)
+        result = await session.execute(insert_into_tweets)
         await session.commit()
         return {"result": True, "tweet_id": list(result)[0][0]}
     else:
