@@ -3,7 +3,7 @@ services:
   app:
     build:
       dockerfile: app/Dockerfile
-    command: gunicorn -k uvicorn.workers.UvicornWorker -b localhost:8080 api.routes:app --reload
+    command: gunicorn -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8080 api.routes:app --reload
     networks:
       - network
     ports:

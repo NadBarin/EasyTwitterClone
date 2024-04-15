@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, File, UploadFile
-from .models import engine, session, Base, User, Tweets, Folowers, Likes, Media
+from fastapi import FastAPI, Request, File, UploadFile, Depends
+from .models import engine, Base, User, Tweets, Folowers, Likes, Media, get_db_session
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, insert, delete, func
 from .shemas import TweetCreate
 import os
@@ -9,7 +10,8 @@ DOWNLOADS = 'img'
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI,
+    session: AsyncSession = Depends(get_db_session)):
     """Создаёт таблицу если её небыло, открывает и закрывает session и engine"""
     async with engine.begin() as conn:
         try:
@@ -24,12 +26,13 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
-async def check_api_key(request: Request):
+async def check_api_key(request: Request,
+    session: AsyncSession = Depends(get_db_session)):
     header_value = request.headers.get('api-key')
     if header_value:
-        check_api_key = await session.execute(select(User.id).where(
+        check_api_k = await session.scalars(select(User.id).where(
             User.api_key == header_value))
-        res = check_api_key.all()
+        res = check_api_k.all()
         if res:
             return list(res)[0][0]
     return False
@@ -39,12 +42,13 @@ async def check_api_key(request: Request):
 # сеть и пользователи будут создаваться не нами. Но нам нужно уметь отличать
 # одного пользователя от другого.
 @app.post('/api/tweets')
-async def add_new_tweet(data: TweetCreate, request: Request):
+async def add_new_tweet(data: TweetCreate, request: Request,
+    session: AsyncSession = Depends(get_db_session)):
     """Добавить новый твит. может содержать картинку."""
     user_id = await check_api_key(request)
     if user_id:
         if data.tweet_media_ids:
-            check_tweet_media = await session.execute(
+            check_tweet_media = await session.scalars(
                 select(Media.id).where(
                     Media.id.in_(data['tweet_media_ids'])))
             insert_into_tweets = insert(Tweets).values(
@@ -55,7 +59,7 @@ async def add_new_tweet(data: TweetCreate, request: Request):
             insert_into_tweets = insert(Tweets).values(
                 content=data.tweet_data,
                 author_id=user_id).returning(Tweets.id)
-        result = await session.execute(insert_into_tweets)
+        result = await session.scalars(insert_into_tweets)
         await session.commit()
         return {"result": True, "tweet_id": list(result)[0][0]}
     else:
@@ -63,7 +67,8 @@ async def add_new_tweet(data: TweetCreate, request: Request):
 
 
 @app.post('/api/medias')
-async def add_new_media(request: Request, file: UploadFile = File(...)):
+async def add_new_media(request: Request, file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_db_session)):
     """Endpoint для загрузки файлов из твита. Загрузка происходит через
     отправку формы."""
     if file and check_api_key(request):
@@ -88,7 +93,8 @@ async def add_new_media(request: Request, file: UploadFile = File(...)):
 
 
 @app.delete('/api/tweets/<id>')
-async def delete_tweet(id: int, request: Request):
+async def delete_tweet(id: int, request: Request,
+    session: AsyncSession = Depends(get_db_session)):
     """удалить свой твит"""
     res = check_api_key(request)
     if res:
@@ -102,7 +108,8 @@ async def delete_tweet(id: int, request: Request):
 
 
 @app.post('/api/users/<id>/follow')
-async def follow(id: int, request: Request):
+async def follow(id: int, request: Request,
+    session: AsyncSession = Depends(get_db_session)):
     """зафоловить другого пользователя"""
     user_id = check_api_key(request)
     check_id = await session.execute(select(User.id).where(
@@ -117,7 +124,8 @@ async def follow(id: int, request: Request):
 
 
 @app.delete('/api/users/<id>/follow')
-async def unfollow(id: int, request: Request):
+async def unfollow(id: int, request: Request,
+    session: AsyncSession = Depends(get_db_session)):
     """отписаться от другого пользователя"""
     user_id = check_api_key(request)
     check_id = await session.execute(select(User.id).where(
@@ -131,7 +139,8 @@ async def unfollow(id: int, request: Request):
 
 
 @app.post('/api/tweets/<id>/likes')
-async def like(id: int, request: Request):
+async def like(id: int, request: Request,
+    session: AsyncSession = Depends(get_db_session)):
     """отмечать твит как понравившийся"""
     user_id = check_api_key(request)
     check_id = await session.execute(select(Tweets.id).where(
@@ -146,7 +155,8 @@ async def like(id: int, request: Request):
 
 
 @app.post('/api/tweets/<id>/likes')
-async def del_like(post, request: Request):
+async def del_like(post, request: Request,
+    session: AsyncSession = Depends(get_db_session)):
     """убрать отметку «Нравится»"""
     user_id = check_api_key(request)
     check_id = await session.execute(select(Tweets.id).where(
@@ -160,7 +170,8 @@ async def del_like(post, request: Request):
 
 
 @app.get('/api/tweets')
-async def feed(request: Request):
+async def feed(request: Request,
+    session: AsyncSession = Depends(get_db_session)):
     """получить ленту из твитов отсортированных в
     порядке убывания по популярности от пользователей, которых он
     фоловит"""
@@ -186,7 +197,8 @@ async def feed(request: Request):
     return {"message": "Can't show tweets. Please check your data."}
 
 
-async def info_user(user_id):
+async def info_user(user_id,
+    session: AsyncSession = Depends(get_db_session)):
     user = await session.execute(select(User.name).where(User.id == user_id))
     following = await session.execute(
         select(Folowers.following_id, User.name).join(User, User.id == Folowers.following_id).where(
@@ -207,7 +219,7 @@ async def info_user(user_id):
 @app.get('/api/users/me')
 async def user_info(request):
     """получить информацию о своём профиле"""
-    user_id = check_api_key(request)
+    user_id = await check_api_key(request)
     if user_id:
         result = info_user(user_id)
         return result
@@ -218,7 +230,7 @@ async def user_info(request):
 async def other_user_info(id: int, request: Request):
     """получить информацию о произвольном профиле по его
     id"""
-    user_id = check_api_key(request)
+    user_id = await check_api_key(request)
     if user_id:
         result = info_user(id)
         return result

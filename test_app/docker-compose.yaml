@@ -1,17 +1,17 @@
 version: '3.2'
 services:
-  db:
+  test_db:
     image: postgres:latest
     restart: always
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: db
+      POSTGRES_DB: test_db
     networks:
       - network
     ports:
-      - '5432:5432'
+      - '5431:5432'
     volumes:
-      - ./db/:/var/lib/postgresql/data
+      - ./test_db/:/var/lib/postgresql/data
 networks:
   network:

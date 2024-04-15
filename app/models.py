@@ -1,17 +1,25 @@
+from collections.abc import AsyncGenerator
 from sqlalchemy import Column, String, Integer, ForeignKey, ARRAY
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
-DATABASE_URL = "postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/db"
-engine = create_async_engine(DATABASE_URL, echo=True)
+DATABASE_URL = "postgresql+asyncpg://admin:admin@db:5432/db"
+engine = create_async_engine(DATABASE_URL, echo=True, pool_pre_ping=True)
 # expire_on_commit=False will prevent attributes from being expired
 # after commit.
 async_session = sessionmaker(
     engine, expire_on_commit=False, class_=AsyncSession
 )
-session = async_session()
 Base = declarative_base()
+
+
+async def get_db_session():
+    session = async_session()
+    try:
+        yield session
+    finally:
+        session.close()
 
 
 class User(Base):
