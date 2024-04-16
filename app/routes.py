@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, insert, delete, func
 from .shemas import TweetCreate
 import os
-
+from fastapi.responses import JSONResponse
 DOWNLOADS = 'img'
 
 
@@ -26,8 +26,7 @@ async def lifespan(app: FastAPI,
 app = FastAPI(lifespan=lifespan)
 
 
-async def check_api_key(request: Request,
-    session: AsyncSession = Depends(get_db_session)):
+async def check_api_key(request: Request, session: AsyncSession):
     header_value = request.headers.get('api-key')
     if header_value:
         check_api_k = await session.execute(select(User.id).where(
@@ -45,7 +44,7 @@ async def check_api_key(request: Request,
 async def add_new_tweet(data: TweetCreate, request: Request,
     session: AsyncSession = Depends(get_db_session)):
     """Добавить новый твит. может содержать картинку."""
-    user_id = await check_api_key(request)
+    user_id = await check_api_key(request, session)
     if user_id:
         if data.tweet_media_ids:
             check_tweet_media = await session.execute(
@@ -63,7 +62,7 @@ async def add_new_tweet(data: TweetCreate, request: Request,
         await session.commit()
         return {"result": True, "tweet_id": list(result)[0][0]}
     else:
-        return {"message": "Can't add new tweet. Please check your data."}
+        return JSONResponse(content={"message": "Can't add new tweet. Please check your data."}, status_code=404)
 
 
 @app.post('/api/medias')
@@ -71,7 +70,7 @@ async def add_new_media(request: Request, file: UploadFile = File(...),
     session: AsyncSession = Depends(get_db_session)):
     """Endpoint для загрузки файлов из твита. Загрузка происходит через
     отправку формы."""
-    if file and check_api_key(request):
+    if file and await check_api_key(request, session):
         try:
             if not os.path.isdir(DOWNLOADS):
                 os.makedirs(DOWNLOADS)
@@ -89,14 +88,14 @@ async def add_new_media(request: Request, file: UploadFile = File(...),
         await session.commit()
         return {"result": True, "media_id": list(media_id)[0][0]}
     else:
-        return {"message": "Can't add new media. Please check your data."}
+        return JSONResponse(content={"message": "Can't add new media. Please check your data."}, status_code=404)
 
 
 @app.delete('/api/tweets/<id>')
 async def delete_tweet(id: int, request: Request,
     session: AsyncSession = Depends(get_db_session)):
     """удалить свой твит"""
-    res = check_api_key(request)
+    res = await check_api_key(request, session)
     if res:
         if id == res:
             await session.execute(delete(Tweets).where(
@@ -104,14 +103,14 @@ async def delete_tweet(id: int, request: Request,
             await session.commit()
             return {"result": True}
         return {"message": "Can't delete tweet. It's not yours."}
-    return {"message": "Can't delete tweet. Please check your data."}
+    return JSONResponse(content={"message": "Can't delete tweet. Please check your data."}, status_code=404)
 
 
 @app.post('/api/users/<id>/follow')
 async def follow(id: int, request: Request,
     session: AsyncSession = Depends(get_db_session)):
     """зафоловить другого пользователя"""
-    user_id = check_api_key(request)
+    user_id = await check_api_key(request, session)
     check_id = await session.execute(select(User.id).where(
         User.id == id))
     if check_id and user_id:
@@ -120,14 +119,14 @@ async def follow(id: int, request: Request,
         await session.execute(insert_into_folowers)
         await session.commit()
         return {"result": True}
-    return {"message": "Can't add new follow. Please check your data."}
+    return JSONResponse(content={"message": "Can't add new follow. Please check your data."}, status_code=404)
 
 
 @app.delete('/api/users/<id>/follow')
 async def unfollow(id: int, request: Request,
     session: AsyncSession = Depends(get_db_session)):
     """отписаться от другого пользователя"""
-    user_id = check_api_key(request)
+    user_id = await check_api_key(request, session)
     check_id = await session.execute(select(User.id).where(
         User.id == id))
     if check_id and user_id:
@@ -135,14 +134,14 @@ async def unfollow(id: int, request: Request,
             Folowers.followers_id == user_id and Folowers.following_id == id))
         await session.commit()
         return {"result": True}
-    return {"message": "Can't add delete following. Please check your data."}
+    return JSONResponse(content={"message": "Can't add delete following. Please check your data."}, status_code=404)
 
 
 @app.post('/api/tweets/<id>/likes')
 async def like(id: int, request: Request,
     session: AsyncSession = Depends(get_db_session)):
     """отмечать твит как понравившийся"""
-    user_id = check_api_key(request)
+    user_id = await check_api_key(request, session)
     check_id = await session.execute(select(Tweets.id).where(
         Tweets.id == id))
     if check_id and user_id:
@@ -151,14 +150,14 @@ async def like(id: int, request: Request,
         await session.execute(insert_into_likes)
         await session.commit()
         return {"result": True}
-    return {"message": "Can't add like tweet. Please check your data."}
+    return JSONResponse(content={"message": "Can't add like tweet. Please check your data."}, status_code=404)
 
 
 @app.post('/api/tweets/<id>/likes')
 async def del_like(post, request: Request,
     session: AsyncSession = Depends(get_db_session)):
     """убрать отметку «Нравится»"""
-    user_id = check_api_key(request)
+    user_id = await check_api_key(request, session)
     check_id = await session.execute(select(Tweets.id).where(
         Tweets.id == id))
     if check_id and user_id:
@@ -166,7 +165,7 @@ async def del_like(post, request: Request,
             Likes.likers_id == user_id and Likes.tweet_id == id))
         await session.commit()
         return {"result": True}
-    return {"message": "Can't add delete like. Please check your data."}
+    return JSONResponse(content={"message": "Can't add delete like. Please check your data."}, status_code=404)
 
 
 @app.get('/api/tweets')
@@ -176,7 +175,7 @@ async def feed(request: Request,
     порядке убывания по популярности от пользователей, которых он
     фоловит"""
 
-    user_id = check_api_key(request)
+    user_id = await check_api_key(request, session)
     if user_id:
         folowing = await session.execute(select(Tweets, User.name).join(
             User, User.id == Tweets.author_id).where(Tweets.author_id._in(
@@ -194,11 +193,10 @@ async def feed(request: Request,
                 str["likes"].append({'user_id': likes[0], 'name': likes[1]})
             result["tweets"].append(str)
         return result
-    return {"message": "Can't show tweets. Please check your data."}
+    return JSONResponse(content={"message": "Can't show tweets. Please check your data."}, status_code=404)
 
 
-async def info_user(user_id,
-    session: AsyncSession = Depends(get_db_session)):
+async def info_user(user_id: int, session: AsyncSession):
     user = await session.execute(select(User.name).where(User.id == user_id))
     following = await session.execute(
         select(Folowers.following_id, User.name).join(User, User.id == Folowers.following_id).where(
@@ -217,21 +215,23 @@ async def info_user(user_id,
 
 
 @app.get('/api/users/me')
-async def user_info(request):
+async def user_info(request,
+    session: AsyncSession = Depends(get_db_session)):
     """получить информацию о своём профиле"""
-    user_id = await check_api_key(request)
+    user_id = await check_api_key(request, session)
     if user_id:
-        result = info_user(user_id)
+        result = info_user(user_id, session)
         return result
-    return {"message": "Can't show users info. Please check your data."}
+    return JSONResponse(content={"message": "Can't show users info. Please check your data."}, status_code=404)
 
 
 @app.get('/api/users/<id>')
-async def other_user_info(id: int, request: Request):
+async def other_user_info(id: int, request: Request,
+    session: AsyncSession = Depends(get_db_session)):
     """получить информацию о произвольном профиле по его
     id"""
-    user_id = await check_api_key(request)
+    user_id = await check_api_key(request, session)
     if user_id:
-        result = info_user(id)
+        result = info_user(id, session)
         return result
-    return {"message": "Can't show users info. Please check your data."}
+    return JSONResponse(content={"message": "Can't show users info. Please check your data."}, status_code=404)

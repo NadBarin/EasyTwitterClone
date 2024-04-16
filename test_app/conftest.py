@@ -1,9 +1,12 @@
+from typing import Generator
+
+import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
-
-from app.routes import app as app_, User, Folowers, Tweets, Likes, Base, engine, get_db_session
+from sqlalchemy.exc import SQLAlchemyError
+from app.routes import app as app_, User, Folowers, Tweets, Likes, Base, get_db_session
 import asyncio
 
 # DATABASE_URL_TEST = "postgresql+asyncpg://admin:admin@localhost/db"
@@ -22,27 +25,27 @@ engine = create_async_engine(DATABASE_URL_TEST, echo=True, pool_pre_ping=True)
 test_async_session = sessionmaker(
     engine, expire_on_commit=False, class_=AsyncSession
 )
-session = test_async_session()
 
 
-async def test_session():
-    async with test_async_session() as session_:
-        yield session_
+@pytest_asyncio.fixture(autouse=True, scope='session')
+async def session_test():
+    session = test_async_session()
+    try:
+        yield session
+        await session.commit()
+    except SQLAlchemyError:
+        await session.rollback()
+        raise
+    finally:
+        await session.close()
 
 
-app_.dependency_overrides[get_db_session] = test_session
-
-
-@pytest_asyncio.fixture
-async def recreate_tables():
+@pytest_asyncio.fixture(scope='session')
+async def app(session_test: AsyncSession):
+    app_.dependency_overrides[get_db_session] = lambda: session_test
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
-        yield
-
-
-@pytest_asyncio.fixture
-async def app():
     async with test_async_session() as session:
         user = User(api_key='123a',
                     name="name")
@@ -60,12 +63,13 @@ async def app():
                       likers_id=1)
         session.add_all([followers, likes])
         await session.commit()
-        yield app_
-        await session.close()
+        try:
+            yield app_
+        finally:
+            await session.close()
 
 
-@pytest_asyncio.fixture()
-async def async_app_client(recreate_tables, app):
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+@pytest_asyncio.fixture(autouse=True, scope='session')
+async def async_app_client(app):
+    async with AsyncClient(app=app_, base_url="http://test") as client:
         yield client

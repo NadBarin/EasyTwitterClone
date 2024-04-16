@@ -3,6 +3,7 @@ from sqlalchemy import Column, String, Integer, ForeignKey, ARRAY
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.exc import SQLAlchemyError
 
 DATABASE_URL = "postgresql+asyncpg://admin:admin@db:5432/db"
 engine = create_async_engine(DATABASE_URL, echo=True, pool_pre_ping=True)
@@ -18,8 +19,12 @@ async def get_db_session():
     session = async_session()
     try:
         yield session
+        await session.commit()
+    except SQLAlchemyError:
+        await session.rollback()
+        raise
     finally:
-        session.close()
+        await session.close()
 
 
 class User(Base):
