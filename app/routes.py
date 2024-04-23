@@ -6,6 +6,8 @@ from sqlalchemy import select, insert, delete, func
 from .shemas import TweetCreate
 import os
 from fastapi.responses import JSONResponse
+
+
 DOWNLOADS = 'img'
 
 
@@ -31,9 +33,9 @@ async def check_api_key(request: Request, session: AsyncSession):
     if header_value:
         check_api_k = await session.execute(select(User.id).where(
             User.api_key == header_value))
-        res = check_api_k.all()
+        res = check_api_k.scalars().first()
         if res:
-            return list(res)[0][0]
+            return res
     return False
 
 
@@ -48,19 +50,23 @@ async def add_new_tweet(data: TweetCreate, request: Request,
     if user_id:
         if data.tweet_media_ids:
             check_tweet_media = await session.execute(
-                select(Media.id).where(
-                    Media.id.in_(data['tweet_media_ids'])))
-            insert_into_tweets = insert(Tweets).values(
-                content=data.tweet_data,
-                attachments=list(check_tweet_media)[0],
-                author_id=user_id).returning(Tweets.id)
+                select(Media).where(Media.id.in_(data.tweet_media_ids)))
+            if check_tweet_media.fetchall():
+                print(f'check_tweet_media: {check_tweet_media.fetchall()}')
+                insert_into_tweets = insert(Tweets).values(
+                    content=data.tweet_data,
+                    attachments=data.tweet_media_ids,
+                    author_id=user_id).returning(Tweets.id)
+            else:
+                return JSONResponse(content={"message": "Can't add new tweet. Please check your data."},
+                                    status_code=404)
         else:
             insert_into_tweets = insert(Tweets).values(
                 content=data.tweet_data,
                 author_id=user_id).returning(Tweets.id)
         result = await session.execute(insert_into_tweets)
         await session.commit()
-        return {"result": True, "tweet_id": list(result)[0][0]}
+        return {"result": True, "tweet_id": result.scalars().first()}
     else:
         return JSONResponse(content={"message": "Can't add new tweet. Please check your data."}, status_code=404)
 
@@ -70,7 +76,8 @@ async def add_new_media(request: Request, file: UploadFile = File(...),
     session: AsyncSession = Depends(get_db_session)):
     """Endpoint для загрузки файлов из твита. Загрузка происходит через
     отправку формы."""
-    if file and await check_api_key(request, session):
+    user_id = await check_api_key(request, session)
+    if file and user_id:
         try:
             if not os.path.isdir(DOWNLOADS):
                 os.makedirs(DOWNLOADS)
@@ -79,7 +86,7 @@ async def add_new_media(request: Request, file: UploadFile = File(...),
             with open(file_path, 'wb') as f:
                 f.write(contents)
         except Exception:
-            return {"message": "There was an error uploading the file"}
+            return JSONResponse(content={"message": "Can't add new media. Please check your data."}, status_code=404)
         finally:
             file.file.close()
         insert_into_medias = insert(Media).values(
