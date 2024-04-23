@@ -1,19 +1,21 @@
+import pytest
 import pytest_asyncio
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
 from app.routes import app as app_, User, Folowers, Tweets, Likes, Base, get_db_session
-
+from sqlalchemy.pool import NullPool
+import asyncio
 
 DATABASE_URL_TEST = "postgresql+asyncpg://postgres:postgres@127.0.0.1:5431/test_db"
-engine = create_async_engine(DATABASE_URL_TEST, echo=True, pool_pre_ping=True)
+engine = create_async_engine(DATABASE_URL_TEST, echo=True, poolclass=NullPool)
 test_async_session = sessionmaker(
     engine, expire_on_commit=False, class_=AsyncSession
 )
 
 
-@pytest_asyncio.fixture(autouse=True, scope='session')
+@pytest_asyncio.fixture(autouse=True)
 async def session_test():
     session = test_async_session()
     try:
@@ -26,7 +28,7 @@ async def session_test():
         await session.close()
 
 
-@pytest_asyncio.fixture(scope='session')
+@pytest_asyncio.fixture
 async def app(session_test: AsyncSession):
     app_.dependency_overrides[get_db_session] = lambda: session_test
     async with engine.begin() as conn:
@@ -55,7 +57,7 @@ async def app(session_test: AsyncSession):
             await session.close()
 
 
-@pytest_asyncio.fixture(autouse=True, scope='session')
+@pytest_asyncio.fixture(autouse=True)
 async def async_app_client(app):
     async with AsyncClient(app=app_, base_url="http://test") as client:
         yield client
