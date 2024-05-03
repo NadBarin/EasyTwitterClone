@@ -10,3 +10,4 @@ pytest
 httpx
 sqlalchemy-utils
 aiofiles
+types-aiofiles
