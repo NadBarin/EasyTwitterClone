@@ -1,14 +1,17 @@
-import pytest
 import pytest_asyncio
-from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import SQLAlchemyError
-from app.routes import app as app_, User, Folowers, Tweets, Likes, Base, get_db_session
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
-import asyncio
 
-DATABASE_URL_TEST = "postgresql+asyncpg://postgres:postgres@127.0.0.1:5431/test_db"
+from app.routes import Base, Folowers, Likes, Tweets, User
+from app.routes import app as app_
+from app.routes import get_db_session
+
+DATABASE_URL_TEST = (
+    "postgresql+asyncpg://postgres:postgres@127.0.0.1:5431/test_db"
+)
 engine = create_async_engine(DATABASE_URL_TEST, echo=True, poolclass=NullPool)
 test_async_session = sessionmaker(
     engine, expire_on_commit=False, class_=AsyncSession
@@ -35,20 +38,15 @@ async def app(session_test: AsyncSession):
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     async with test_async_session() as session:
-        user = User(api_key='123a',
-                    name="name")
-        user_2 = User(api_key='124a',
-                      name="name2")
+        user = User(api_key="123a", name="name")
+        user_2 = User(api_key="124a", name="name2")
         session.add_all([user, user_2])
         await session.commit()
-        tweets = Tweets(content='content',
-                        author_id=2)
+        tweets = Tweets(content="content", author_id=2)
         session.add(tweets)
         await session.commit()
-        followers = Folowers(followers_id=1,
-                             following_id=2)
-        likes = Likes(tweet_id=1,
-                      likers_id=1)
+        followers = Folowers(followers_id=1, following_id=2)
+        likes = Likes(tweet_id=1, likers_id=1)
         session.add_all([followers, likes])
         await session.commit()
         try:
@@ -59,5 +57,8 @@ async def app(session_test: AsyncSession):
 
 @pytest_asyncio.fixture(autouse=True)
 async def async_app_client(app):
-    async with AsyncClient(app=app_, base_url="http://test") as client:
+    transport = ASGITransport(app=app_)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
         yield client
