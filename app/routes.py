@@ -277,7 +277,7 @@ async def like(
 
 @app.delete("/api/tweets/{id}/likes")
 async def del_like(
-    id, request: Request, session: AsyncSession = Depends(get_db_session)
+    id: int, request: Request, session: AsyncSession = Depends(get_db_session)
 ):
     """убрать отметку «Нравится»"""
     user_id = await check_api_key(request, session)
