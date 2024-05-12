@@ -25,7 +25,7 @@ DOWNLOADS: str = "img"
 @asynccontextmanager
 async def lifespan(
     app: FastAPI, session: AsyncSession = Depends(get_db_session)
-):
+):  # pragma: no cover
     """Создаёт таблицу если её небыло,
     открывает и закрывает session и engine"""
     async with engine.begin() as conn:
@@ -115,33 +115,23 @@ async def add_new_media(
     отправку формы."""
     user_id = await check_api_key(request, session)
     if file and user_id:
-        try:
-            if not os.path.isdir(DOWNLOADS):
-                os.makedirs(DOWNLOADS)
-            check_file_id = await session.execute(
-                select(Media.id).order_by(Media.id.desc()).limit(1)
-            )
-            res = check_file_id.scalars().first()
-            print("res: ", res)
-            if file.filename:
-                extension: list[str] = file.filename.split(".")
-                if res is not None:
-                    file_path: str = os.path.join(
-                        DOWNLOADS, f"{res + 1}.{extension[-1]}"
-                    )
-                else:
-                    file_path = os.path.join(DOWNLOADS, f"{1}.{extension[-1]}")
-                contents = file.file.read()
-                with open(file_path, "wb") as f:
-                    f.write(contents)
-        except FileNotFoundError:
-            return JSONResponse(
-                content={
-                    "message": "Can't add new media. Please check your data."
-                },
-                status_code=404,
-            )
-        finally:
+        if not os.path.isdir(DOWNLOADS):
+            os.makedirs(DOWNLOADS)
+        check_file_id = await session.execute(
+            select(Media.id).order_by(Media.id.desc()).limit(1)
+        )
+        res = check_file_id.scalars().first()
+        if file.filename:
+            extension: list[str] = file.filename.split(".")
+            if res is not None:
+                file_path: str = os.path.join(
+                    DOWNLOADS, f"{res + 1}.{extension[-1]}"
+                )
+            else:
+                file_path = os.path.join(DOWNLOADS, f"{1}.{extension[-1]}")
+            contents = file.file.read()
+            with open(file_path, "wb") as f:
+                f.write(contents)
             file.file.close()
         insert_into_medias = (
             insert(Media).values(file=file.filename).returning(Media.id)
@@ -163,15 +153,15 @@ async def delete_tweet(
     id: int, request: Request, session: AsyncSession = Depends(get_db_session)
 ):
     """удалить свой твит"""
-    res = await check_api_key(request, session)
-    if res:
+    user_id = await check_api_key(request, session)
+    if user_id:
         is_your_post = await session.execute(
-            select(Tweets).where(Tweets.author_id == res)
+            select(Tweets).where(Tweets.author_id == user_id)
         )
         if is_your_post.scalars().first():
             await session.execute(
                 delete(Tweets).where(
-                    (Tweets.author_id == res) & (id == Tweets.id)
+                    (Tweets.author_id == user_id) & (id == Tweets.id)
                 )
             )
             await session.commit()
@@ -236,9 +226,7 @@ async def unfollow(
         await session.commit()
         return {"result": True}
     return JSONResponse(
-        content={
-            "message": "Can't add delete following. Please check your data."
-        },
+        content={"message": "Can't delete following. Please check your data."},
         status_code=404,
     )
 
@@ -290,7 +278,7 @@ async def del_like(
         await session.commit()
         return {"result": True}
     return JSONResponse(
-        content={"message": "Can't add delete like. Please check your data."},
+        content={"message": "Can't delete like. Please check your data."},
         status_code=404,
     )
 
@@ -352,20 +340,19 @@ async def feed(
 async def info_user(user_id: int, session: AsyncSession):
     user_ = await session.execute(select(User.name).where(User.id == user_id))
     user: list[Row] = user_.fetchall()
-    print("user_check: ", user)
-    following_ = await session.execute(
-        select(Folowers.following_id, User.name)
-        .join(User, User.id == Folowers.following_id)
-        .where(Folowers.followers_id == user_id)
-    )
-    following: list[Row] = following_.fetchall()
-    follows_ = await session.execute(
-        select(Folowers.followers_id, User.name)
-        .join(User, User.id == Folowers.followers_id)
-        .where(Folowers.following_id == user_id)
-    )
-    follows: list[Row] = follows_.fetchall()
     if user:
+        following_ = await session.execute(
+            select(Folowers.following_id, User.name)
+            .join(User, User.id == Folowers.following_id)
+            .where(Folowers.followers_id == user_id)
+        )
+        following: list[Row] = following_.fetchall()
+        follows_ = await session.execute(
+            select(Folowers.followers_id, User.name)
+            .join(User, User.id == Folowers.followers_id)
+            .where(Folowers.following_id == user_id)
+        )
+        follows: list[Row] = follows_.fetchall()
         result: dict = {
             "result": True,
             "user": {
@@ -382,10 +369,7 @@ async def info_user(user_id: int, session: AsyncSession):
             if i[0] != user_id:
                 result["user"]["followers"].append({"id": i[0], "name": i[1]})
         return result
-    return JSONResponse(
-        content={"message": "Can't show users info. Please check your data."},
-        status_code=404,
-    )
+    return False
 
 
 @app.get("/api/users/me")
@@ -410,7 +394,15 @@ async def other_user_info(
     id"""
     user_id = await check_api_key(request, session)
     if user_id:
-        return await info_user(id, session)
+        res = await info_user(id, session)
+        if res:
+            return res
+        return JSONResponse(
+            content={
+                "message": "Can't show users info. Please check your data."
+            },
+            status_code=404,
+        )
     return JSONResponse(
         content={"message": "Can't show users info. Please check your data."},
         status_code=404,
