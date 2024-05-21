@@ -79,6 +79,22 @@ async def test_add_new_tweet_with_files_not_exist(async_app_client) -> None:
     }
 
 
+async def test_add_new_tweet_with_fail_file_id(async_app_client) -> None:
+    await add_media(async_app_client)
+    data = {
+        "tweet_data": "123",
+        "tweet_media_ids": [0],
+    }
+    resp = await async_app_client.post(
+        "/api/tweets", json=data, headers={"api-key": "123a"}
+    )
+    data = resp.json()
+    assert resp.status_code == 404
+    assert data == {
+        "message": "Can't add new tweet. " "Please check your data."
+    }
+
+
 async def test_add_new_tweet_without_files_with_fail_api_key(
     async_app_client,
 ) -> None:
@@ -229,7 +245,7 @@ async def test_feed(async_app_client) -> None:
             {
                 "id": 1,
                 "content": "content",
-                "attachments": [None],
+                "attachments": None,
                 "author": {"id": 2, "name": "name2"},
                 "likes": [{"user_id": 1, "name": "name"}],
             }
