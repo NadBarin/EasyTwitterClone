@@ -2,6 +2,7 @@ import os
 from contextlib import asynccontextmanager
 from typing import Annotated
 
+import aiofiles
 from fastapi import Depends, FastAPI, File, Header, UploadFile
 from fastapi.responses import JSONResponse
 from sqlalchemy import delete, func, insert, select
@@ -141,9 +142,9 @@ async def add_new_media(
                 file_name = f"{1}.{extension[-1]}"
             file_path = os.path.join(DOWNLOADS, file_name)
             contents = file.file.read()
-            with open(file_path, "wb") as f:
-                f.write(contents)
             file.file.close()
+            async with aiofiles.open(file_path, "wb") as f:
+                await f.write(contents)
             insert_into_medias = (
                 insert(Media)
                 .values(file=file_name, uploader_id=user_id)
