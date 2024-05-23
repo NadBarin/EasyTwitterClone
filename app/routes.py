@@ -66,13 +66,14 @@ async def add_new_tweet(
     if user_id:
         if data.tweet_media_ids:
             check_tweet_media = await session.execute(
-                select(Media.id).where(Media.id.in_(data.tweet_media_ids))
+                select(Media.id).where(
+                    (Media.id.in_(data.tweet_media_ids))
+                    & (Media.uploader_id == user_id)
+                )
             )
             check_tweet_media_ = check_tweet_media.fetchall()
             if check_tweet_media_:
-                if set(check_tweet_media_[0]).issubset(
-                    data.tweet_media_ids
-                ) and len(check_tweet_media_[0]) == len(data.tweet_media_ids):
+                if len(check_tweet_media_) == len(data.tweet_media_ids):
                     insert_into_tweets = (
                         insert(Tweets)
                         .values(
@@ -125,9 +126,9 @@ async def add_new_media(
     """Endpoint для загрузки файлов из твита. Загрузка происходит через
     отправку формы."""
     user_id = await check_api_key(api_key, session)
+    if not os.path.exists(DOWNLOADS):
+        os.makedirs(DOWNLOADS)
     if file and user_id:
-        if not os.path.isdir(DOWNLOADS):
-            os.makedirs(DOWNLOADS)
         check_file_id = await session.execute(
             select(Media.id).order_by(Media.id.desc()).limit(1)
         )
@@ -135,21 +136,22 @@ async def add_new_media(
         if file.filename:
             extension: list[str] = file.filename.split(".")
             if res is not None:
-                file_path: str = os.path.join(
-                    DOWNLOADS, f"{res + 1}.{extension[-1]}"
-                )
+                file_name = f"{res + 1}.{extension[-1]}"
             else:
-                file_path = os.path.join(DOWNLOADS, f"{1}.{extension[-1]}")
+                file_name = f"{1}.{extension[-1]}"
+            file_path = os.path.join(DOWNLOADS, file_name)
             contents = file.file.read()
             with open(file_path, "wb") as f:
                 f.write(contents)
             file.file.close()
-        insert_into_medias = (
-            insert(Media).values(file=file.filename).returning(Media.id)
-        )
-        media_id = await session.execute(insert_into_medias)
-        await session.commit()
-        return {"result": True, "media_id": list(media_id)[0][0]}
+            insert_into_medias = (
+                insert(Media)
+                .values(file=file_name, uploader_id=user_id)
+                .returning(Media.id)
+            )
+            media_id = await session.execute(insert_into_medias)
+            await session.commit()
+            return {"result": True, "media_id": list(media_id)[0][0]}
     else:
         return JSONResponse(
             content={
@@ -165,22 +167,36 @@ async def delete_tweet(
     api_key: str = Header("api-key"),
     session: AsyncSession = Depends(get_db_session),
 ):
-    """удалить свой твит"""
+    """удалить свой твит вместе с вложенными файлами"""
     user_id = await check_api_key(api_key, session)
     if user_id:
         is_your_post = await session.execute(
             select(Tweets).where(Tweets.author_id == user_id)
         )
         if is_your_post.scalars().first():
-            await session.execute(
-                delete(Tweets).where(
-                    (Tweets.author_id == user_id) & (id == Tweets.id)
-                )
+            attachments_ = await session.execute(
+                delete(Tweets)
+                .where((Tweets.author_id == user_id) & (id == Tweets.id))
+                .returning(Tweets.attachments)
             )
+            attachments = attachments_.scalars().first()
             await session.commit()
+            if attachments:
+                names_ = await session.execute(
+                    delete(Media)
+                    .where(Media.id.in_(attachments))
+                    .returning(Media.file)
+                )
+                names: list[Row] = names_.fetchall()
+                await session.commit()
+                for i in names:
+                    os.remove(os.path.join(DOWNLOADS, f"{i[0]}"))
             return {"result": True}
         return JSONResponse(
-            content={"message": "Can't delete tweet. It's not yours."},
+            content={
+                "message": "Can't delete tweet. "
+                "It's not yours or it's not exist."
+            },
             status_code=404,
         )
     return JSONResponse(

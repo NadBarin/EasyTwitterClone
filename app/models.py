@@ -36,6 +36,9 @@ class Media(Base):
     __tablename__ = "media"
     id = Column(Integer, primary_key=True)
     file = Column(String, nullable=False)
+    uploader_id = Column(
+        Integer, ForeignKey("user.id", ondelete="CASCADE"), nullable=False
+    )
 
 
 class Folowers(Base):
