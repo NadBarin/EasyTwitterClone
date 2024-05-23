@@ -63,6 +63,21 @@ async def test_add_new_tweet_with_file(async_app_client) -> None:
     assert data == {"result": True, "tweet_id": 2}
 
 
+async def test_add_new_tweet_with_files(async_app_client) -> None:
+    await add_media(async_app_client)
+    await add_media(async_app_client)
+    data = {
+        "tweet_data": "123",
+        "tweet_media_ids": [1, 2],
+    }
+    resp = await async_app_client.post(
+        "/api/tweets", json=data, headers={"api-key": "123a"}
+    )
+    data = resp.json()
+    assert resp.status_code == 200
+    assert data == {"result": True, "tweet_id": 2}
+
+
 async def test_add_new_tweet_with_files_not_exist(async_app_client) -> None:
     await add_media(async_app_client)
     data = {
@@ -131,7 +146,27 @@ async def test_delete_tweet_with_fail_user(async_app_client) -> None:
     )
     data = resp.json()
     assert resp.status_code == 404
-    assert data == {"message": "Can't delete tweet. It's not yours."}
+    assert data == {
+        "message": "Can't delete tweet. It's not yours or it's not exist."
+    }
+
+
+async def test_delete_tweet_with_file(async_app_client) -> None:
+    await add_media(async_app_client)
+    await add_media(async_app_client)
+    data = {
+        "tweet_data": "123",
+        "tweet_media_ids": [1, 2],
+    }
+    await async_app_client.post(
+        "/api/tweets", json=data, headers={"api-key": "123a"}
+    )
+    resp = await async_app_client.delete(
+        "/api/tweets/2", headers={"api-key": "123a"}
+    )
+    data = resp.json()
+    assert resp.status_code == 200
+    assert data == {"result": True}
 
 
 async def test_follow(async_app_client) -> None:
