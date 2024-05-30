@@ -3,8 +3,12 @@ from contextlib import asynccontextmanager
 from typing import Annotated
 
 import aiofiles
-from fastapi import Depends, FastAPI, File, Header, UploadFile
+from fastapi import Depends, FastAPI, File, Header, UploadFile, Request
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.templating import Jinja2Templates
 from sqlalchemy import delete, func, insert, select
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,7 +30,7 @@ DOWNLOADS: str = "img"
 
 @asynccontextmanager
 async def lifespan(
-    app: FastAPI, session: AsyncSession = Depends(get_db_session)
+        app: FastAPI, session: AsyncSession = Depends(get_db_session)
 ):  # pragma: no cover
     """Создаёт таблицу если её небыло,
     открывает и закрывает session и engine"""
@@ -37,11 +41,32 @@ async def lifespan(
     await engine.dispose()
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(title='main')
+app_api = FastAPI(lifespan=lifespan, title='api')
+
+static = os.path.abspath("static")
+app.mount("/api", app_api, name="api")
+app.mount('/static', StaticFiles(directory=static, html=True), name='static')
+templates = Jinja2Templates(directory=os.path.abspath("templates"))
+
+origins = ["http://127.0.0.1:8000",
+           "http://0.0.0.0:8080"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
 
 
 async def check_api_key(
-    header_value: Annotated[str | None, Header()], session: AsyncSession
+        header_value: Annotated[str | None, Header()], session: AsyncSession
 ):
     if header_value:
         check_api_k = await session.execute(
@@ -56,11 +81,12 @@ async def check_api_key(
 # требования регистрации пользователя нет: это корпоративная
 # сеть и пользователи будут создаваться не нами. Но нам нужно уметь отличать
 # одного пользователя от другого.
-@app.post("/api/tweets")
+'''
+@app_api.post("/tweets")
 async def add_new_tweet(
-    data: TweetCreate,
-    api_key: str | None = Header("api-key"),
-    session: AsyncSession = Depends(get_db_session),
+        data: TweetCreate,
+        api_key: str | None = Header("api-key"),
+        session: AsyncSession = Depends(get_db_session),
 ):
     """Добавить новый твит. может содержать картинку."""
     user_id = await check_api_key(api_key, session)
@@ -88,7 +114,7 @@ async def add_new_tweet(
                     return JSONResponse(
                         content={
                             "message": "Can't add new tweet. "
-                            "Please check your data."
+                                       "Please check your data."
                         },
                         status_code=404,
                     )
@@ -96,7 +122,7 @@ async def add_new_tweet(
                 return JSONResponse(
                     content={
                         "message": "Can't add new tweet. "
-                        "Please check your data."
+                                   "Please check your data."
                     },
                     status_code=404,
                 )
@@ -118,11 +144,11 @@ async def add_new_tweet(
         )
 
 
-@app.post("/api/medias")
+@app_api.post("/medias")
 async def add_new_media(
-    api_key: str = Header("api-key"),
-    file: UploadFile = File(...),
-    session: AsyncSession = Depends(get_db_session),
+        api_key: str = Header("api-key"),
+        file: UploadFile = File(...),
+        session: AsyncSession = Depends(get_db_session),
 ):
     """Endpoint для загрузки файлов из твита. Загрузка происходит через
     отправку формы."""
@@ -162,11 +188,11 @@ async def add_new_media(
         )
 
 
-@app.delete("/api/tweets/{id}")
+@app_api.delete("/tweets/{id}")
 async def delete_tweet(
-    id: int,
-    api_key: str = Header("api-key"),
-    session: AsyncSession = Depends(get_db_session),
+        id: int,
+        api_key: str = Header("api-key"),
+        session: AsyncSession = Depends(get_db_session),
 ):
     """удалить свой твит вместе с вложенными файлами"""
     user_id = await check_api_key(api_key, session)
@@ -196,7 +222,7 @@ async def delete_tweet(
         return JSONResponse(
             content={
                 "message": "Can't delete tweet. "
-                "It's not yours or it's not exist."
+                           "It's not yours or it's not exist."
             },
             status_code=404,
         )
@@ -206,11 +232,11 @@ async def delete_tweet(
     )
 
 
-@app.post("/api/users/{id}/follow")
+@app_api.post("/users/{id}/follow")
 async def follow(
-    id: int,
-    api_key: str = Header("api-key"),
-    session: AsyncSession = Depends(get_db_session),
+        id: int,
+        api_key: str = Header("api-key"),
+        session: AsyncSession = Depends(get_db_session),
 ):
     """зафоловить другого пользователя"""
     user_id = await check_api_key(api_key, session)
@@ -232,7 +258,7 @@ async def follow(
         return JSONResponse(
             content={
                 "message": "Can't add new follow. "
-                "You're already following this user."
+                           "You're already following this user."
             },
             status_code=404,
         )
@@ -242,11 +268,11 @@ async def follow(
     )
 
 
-@app.delete("/api/users/{id}/follow")
+@app_api.delete("/users/{id}/follow")
 async def unfollow(
-    id: int,
-    api_key: str = Header("api-key"),
-    session: AsyncSession = Depends(get_db_session),
+        id: int,
+        api_key: str = Header("api-key"),
+        session: AsyncSession = Depends(get_db_session),
 ):
     """отписаться от другого пользователя"""
     user_id = await check_api_key(api_key, session)
@@ -265,11 +291,11 @@ async def unfollow(
     )
 
 
-@app.post("/api/tweets/{id}/likes")
+@app_api.post("/tweets/{id}/likes")
 async def like(
-    id: int,
-    api_key: str = Header("api-key"),
-    session: AsyncSession = Depends(get_db_session),
+        id: int,
+        api_key: str = Header("api-key"),
+        session: AsyncSession = Depends(get_db_session),
 ):
     """отмечать твит как понравившийся"""
     user_id = await check_api_key(api_key, session)
@@ -299,11 +325,11 @@ async def like(
     )
 
 
-@app.delete("/api/tweets/{id}/likes")
+@app_api.delete("/tweets/{id}/likes")
 async def delete_like(
-    id: int,
-    api_key: str = Header("api-key"),
-    session: AsyncSession = Depends(get_db_session),
+        id: int,
+        api_key: str = Header("api-key"),
+        session: AsyncSession = Depends(get_db_session),
 ):
     """убрать отметку «Нравится»"""
     user_id = await check_api_key(api_key, session)
@@ -321,10 +347,10 @@ async def delete_like(
     )
 
 
-@app.get("/api/tweets")
+@app_api.get("/tweets")
 async def feed(
-    api_key: str = Header("api-key"),
-    session: AsyncSession = Depends(get_db_session),
+        api_key: str = Header("api-key"),
+        session: AsyncSession = Depends(get_db_session),
 ):
     """получить ленту из твитов отсортированных в
     порядке убывания по популярности от пользователей, которых он
@@ -413,11 +439,10 @@ async def info_user(user_id: int, session: AsyncSession):
         return result
     return False
 
-
-@app.get("/api/users/me")
+@app_api.get("/users/me")
 async def user_info(
-    api_key: str = Header("api-key"),
-    session: AsyncSession = Depends(get_db_session),
+        api_key: str = Header("api-key"),
+        session: AsyncSession = Depends(get_db_session),
 ):
     """получить информацию о своём профиле"""
     user_id = await check_api_key(api_key, session)
@@ -427,13 +452,26 @@ async def user_info(
         content={"message": "Can't show users info. Please check your data."},
         status_code=404,
     )
+'''
+@app_api.get("/users/me")
+async def user_info(
+):
+    return {
+        "result": "true",
+        "user": {
+        "id": 1,
+        "name": "name",
+        "followers": [], "following": []
+        }
+    }
 
 
-@app.get("/api/users/{id}")
+'''
+@app_api.get("/users/{id}")
 async def other_user_info(
-    id: int,
-    api_key: str = Header("api-key"),
-    session: AsyncSession = Depends(get_db_session),
+        id: int,
+        api_key: str = Header("api-key"),
+        session: AsyncSession = Depends(get_db_session),
 ):
     """получить информацию о произвольном профиле по его
     id"""
@@ -452,3 +490,4 @@ async def other_user_info(
         content={"message": "Can't show users info. Please check your data."},
         status_code=404,
     )
+'''

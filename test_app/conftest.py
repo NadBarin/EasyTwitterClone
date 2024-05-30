@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
 from app.routes import Base, Folowers, Likes, Tweets, User
-from app.routes import app as app_
+from app.routes import app_api as app_
 from app.routes import get_db_session
 
 DATABASE_URL_TEST = (

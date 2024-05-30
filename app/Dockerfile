@@ -8,6 +8,10 @@ COPY /app/shemas.py /app/api/shemas.py
 
 COPY /app/routes.py /app/api/routes.py
 
+COPY /static /app/static
+
+COPY /templates /app/templates
+
 COPY /app/requirements.txt /app/requirements.txt
 
 RUN pip install --upgrade pip
