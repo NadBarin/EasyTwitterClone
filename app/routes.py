@@ -1,20 +1,21 @@
 import os
 from contextlib import asynccontextmanager
-from typing import Annotated
+from datetime import datetime
 
 import aiofiles
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Header, Request, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import case, delete, func, insert, select
-from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
+from sqlalchemy.sql.expression import and_, any_, or_
 
 from .models import (
     Base,
-    Folowers,
+    Followers,
     Likes,
     Media,
     Tweets,
@@ -26,7 +27,7 @@ from .shemas import TweetCreate
 
 static = os.path.abspath("static")
 
-DOWNLOADS: str = os.path.join("static", "images")
+DOWNLOADS: str | None = os.getenv("DOWNLOADS")
 
 
 @asynccontextmanager
@@ -48,446 +49,522 @@ app_api = FastAPI(title="api")
 app.mount("/api", app_api, name="api")
 app.mount("/static", StaticFiles(directory=static, html=True), name="static")
 templates = Jinja2Templates(directory=static)
-
-origins = ["http://127.0.0.1:8000", "http://0.0.0.0:8080"]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+load_dotenv()
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index(
-        request: Request
-):  # pragma: no cover
+async def index(request: Request):  # pragma: no cover
     return templates.TemplateResponse("index.html", {"request": request})
 
 
+async def catch_exceptions_middleware(request: Request, call_next):
+    # pragma: no cover
+    """отлавливает ошибки оформляет по нужному формату"""
+    try:
+        return await call_next(request)
+    except Exception as e:
+        return JSONResponse(
+            content={
+                "result": False,
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+            },
+            status_code=getattr(e, "status_code", 400),
+        )
+
+
+app_api.middleware("http")(catch_exceptions_middleware)
+
+
 async def check_api_key(
-    header_value: Annotated[str | None, Header()], session: AsyncSession
+    api_key: str | None = Header("api-key"),
+    session: AsyncSession = Depends(get_db_session),
 ):
-    if header_value:
+    """
+    Проверяет существует ли api-key.
+
+    ### Parameters:
+        - **api_key**: `str | None` - API-ключ текущего пользователя.
+        - **session**: `AsyncSession` - Сессия с текущей базой данных.
+        ### Returns:
+        - `id текущего пользователя или сообщение об ошибке.
+
+    """
+    if api_key:
         check_api_k = await session.execute(
-            select(User.id).where(User.api_key == header_value)
+            select(User.id).where(User.api_key == api_key)
         )
         res = check_api_k.scalars().first()
         if res:
             return res
-    return False
+        raise Exception("Wrong api-key. Please check your data.")
+    raise Exception("Wrong api-key. Please check your data.")
 
 
-# требования регистрации пользователя нет: это корпоративная
-# сеть и пользователи будут создаваться не нами. Но нам нужно уметь отличать
-# одного пользователя от другого.
 @app_api.post("/tweets")
 async def add_new_tweet(
     data: TweetCreate,
-    api_key: str | None = Header("api-key"),
     session: AsyncSession = Depends(get_db_session),
+    user_id: int = Depends(check_api_key),
 ):
-    """Добавить новый твит. может содержать картинку."""
-    user_id = await check_api_key(api_key, session)
-    if user_id:
-        if data.tweet_media_ids:
-            check_tweet_media = await session.execute(
-                select(Media.id).where(
-                    (Media.id.in_(data.tweet_media_ids))
-                    & (Media.uploader_id == user_id)
-                )
-            )
-            check_tweet_media_ = check_tweet_media.fetchall()
-            if check_tweet_media_:
-                if len(check_tweet_media_) == len(data.tweet_media_ids):
-                    insert_into_tweets = (
-                        insert(Tweets)
-                        .values(
-                            content=data.tweet_data,
-                            attachments=data.tweet_media_ids,
-                            author_id=user_id,
-                        )
-                        .returning(Tweets.id)
-                    )
-                else:
-                    return JSONResponse(
-                        content={
-                            "message": "Can't add new tweet. "
-                            "Please check your data."
-                        },
-                        status_code=404,
-                    )
-            else:
-                return JSONResponse(
-                    content={
-                        "message": "Can't add new tweet. "
-                        "Please check your data."
-                    },
-                    status_code=404,
-                )
-        else:
-            insert_into_tweets = (
-                insert(Tweets)
-                .values(content=data.tweet_data, author_id=user_id)
-                .returning(Tweets.id)
-            )
-        result = await session.execute(insert_into_tweets)
-        await session.commit()
-        return {"result": True, "tweet_id": result.scalars().first()}
-    else:
-        return JSONResponse(
-            content={
-                "message": "Can't add new tweet. Please check your data."
-            },
-            status_code=404,
+    """
+    Добавить новый твит. Может содержать картинку.
+
+    ### Parameters:
+
+    - **data**: `TweetCreate` - содержание твита и список с
+    ID вложенных файлов.
+    - **session**: `AsyncSession` - Сессия с текущей
+    базой данных.
+    - **user_id**: `int` - id текущего пользователя, возвращёный
+    из check_api_key
+
+    ### Returns:
+    - `Response` объект с успешным статусом или неуспешным
+    и сообщением об ошибке.
+    """
+    if data.tweet_media_ids:
+        media_ids_query = select(Media.id).where(
+            (Media.id.in_(data.tweet_media_ids))
+            & (Media.uploader_id == user_id)
         )
+        media_ids_result = await session.execute(media_ids_query)
+        media_ids = media_ids_result.scalars().all()
+
+        if len(media_ids) != len(data.tweet_media_ids):
+            raise Exception("Can't add new tweet. Please check your data.")
+
+    tweet_insert = (
+        insert(Tweets)
+        .values(
+            content=data.tweet_data,
+            attachments=data.tweet_media_ids if data.tweet_media_ids else [],
+            author_id=user_id,
+        )
+        .returning(Tweets.id)
+    )
+
+    result = await session.execute(tweet_insert)
+    await session.commit()
+
+    return {"result": True, "tweet_id": result.scalars().first()}
 
 
 @app_api.post("/medias")
 async def add_new_media(
-    api_key: str = Header("api-key"),
     file: UploadFile = File(...),
     session: AsyncSession = Depends(get_db_session),
+    user_id: int = Depends(check_api_key),
 ):
-    """Endpoint для загрузки файлов из твита. Загрузка происходит через
-    отправку формы."""
-    user_id = await check_api_key(api_key, session)
-    if not os.path.exists(DOWNLOADS):
-        os.makedirs(DOWNLOADS)
-    if file and user_id:
-        check_file_id = await session.execute(
-            select(Media.id).order_by(Media.id.desc()).limit(1)
-        )
-        res = check_file_id.scalars().first()
-        if file.filename:
-            extension: list[str] = file.filename.split(".")
-            if res is not None:
-                file_name = f"{extension[:-1]}_{res + 1}.{extension[-1]}"
-            else:
-                file_name = f"{extension[:-1]}_{1}.{extension[-1]}"
+    """
+    Загрузить картинку для твита.
+
+    ### Parameters:
+    - **file**: `UploadFile` - Загружаемый файл.
+    - **session**: `AsyncSession` - Сессия с текущей
+    базой данных.
+    - **user_id**: `int` - id текущего пользователя, возвращёный
+    из check_api_key
+
+    ### Returns:
+    - `Response` объект с успешным статусом и id загруженной картинки
+    или неуспешным и сообщением об ошибке.
+    """
+    if DOWNLOADS is not None:
+        if not os.path.exists(DOWNLOADS):
+            os.makedirs(DOWNLOADS)
+        if file:
+            # Используем временную метку для создания уникального имени файла
+            timestamp = datetime.now()
+            file_name = (
+                f"{file.filename.rsplit('.', 1)[0]}_{timestamp}."
+                f"{file.filename.rsplit('.', 1)[-1]}"
+            )
             file_path = os.path.join(DOWNLOADS, file_name)
-            contents = file.file.read()
-            file.file.close()
+            contents = await file.read()
+            await file.close()
             async with aiofiles.open(file_path, "wb") as f:
                 await f.write(contents)
-            insert_into_medias = (
-                insert(Media)
-                .values(file=file_name, uploader_id=user_id)
-                .returning(Media.id)
-            )
-            media_id = await session.execute(insert_into_medias)
+            new_media = Media(file=file_name, uploader_id=user_id)
+            session.add(new_media)
             await session.commit()
-            return {"result": True, "media_id": list(media_id)[0][0]}
-    else:
-        return JSONResponse(
-            content={
-                "message": "Can't add new media. Please check your data."
-            },
-            status_code=404,
-        )
+            return {"result": True, "media_id": new_media.id}
+    raise Exception("Can't add new media. Please check your data.")
 
 
 @app_api.delete("/tweets/{id}")
 async def delete_tweet(
     id: int,
-    api_key: str = Header("api-key"),
     session: AsyncSession = Depends(get_db_session),
+    user_id: int = Depends(check_api_key),
 ):
-    """удалить свой твит вместе с вложенными файлами"""
-    user_id = await check_api_key(api_key, session)
-    if user_id:
-        is_your_post = await session.execute(
-            select(Tweets).where(Tweets.author_id == user_id)
-        )
-        if is_your_post.scalars().first():
-            attachments_ = await session.execute(
-                delete(Tweets)
-                .where((Tweets.author_id == user_id) & (id == Tweets.id))
-                .returning(Tweets.attachments)
+    """
+    Удалить свой твит вместе с вложенными файлами.
+
+    ### Parameters:
+    - **id**: `int` - ID твита, который нужно удалить.
+    - **session**: `AsyncSession` - Сессия с текущей базой данных.
+    - **user_id**: `int` - id текущего пользователя, возвращёный
+    из check_api_key
+
+    ### Returns:
+    - `Response` объект с успешным статусом
+    или неуспешным и сообщением об ошибке.
+    """
+    tweet_to_delete = await session.get(Tweets, id)
+    if tweet_to_delete and tweet_to_delete.author_id == user_id:
+        attachments = tweet_to_delete.attachments
+        await session.execute(
+            delete(Tweets).where(
+                (Tweets.author_id == user_id) & (id == tweet_to_delete.id)
             )
-            attachments = attachments_.scalars().first()
-            await session.commit()
-            if attachments:
-                names_ = await session.execute(
-                    delete(Media)
-                    .where(Media.id.in_(attachments))
-                    .returning(Media.file)
-                )
-                names: list[Row] = names_.fetchall()
-                await session.commit()
-                for i in names:
-                    os.remove(os.path.join(DOWNLOADS, f"{i[0]}"))
-            return {"result": True}
-        return JSONResponse(
-            content={
-                "message": "Can't delete tweet. "
-                "It's not yours or it's not exist."
-            },
-            status_code=404,
         )
-    return JSONResponse(
-        content={"message": "Can't delete tweet. Please check your data."},
-        status_code=404,
-    )
+        await session.commit()
+        if attachments:
+            names = await session.execute(
+                select(Media.file).where(Media.id.in_(attachments))
+            )
+            await session.execute(
+                delete(Media).where(Media.id.in_(attachments))
+            )
+            await session.commit()
+            for name in names.scalars():
+                if DOWNLOADS is not None:
+                    os.remove(os.path.join(DOWNLOADS, name))
+        return {"result": True}
+    raise Exception("Can't delete tweet. " "It's not yours or it's not exist.")
 
 
 @app_api.post("/users/{id}/follow")
 async def follow(
     id: int,
-    api_key: str = Header("api-key"),
     session: AsyncSession = Depends(get_db_session),
+    user_id: int = Depends(check_api_key),
 ):
-    """зафоловить другого пользователя"""
-    user_id = await check_api_key(api_key, session)
+    """
+     Зафоловить другого пользователя.
+
+    ### Parameters:
+        - **id**: `int` - ID пользователя, на которого текущий
+        пользователь подписывается.
+        - **session**: `AsyncSession` - Сессия с текущей базой данных.
+        - **user_id**: `int` - id текущего пользователя, возвращёный
+        из check_api_key
+
+    ### Returns:
+        - `Response` объект с успешным статусом
+        или неуспешным и сообщением об ошибке.
+    """
     check_id = await session.execute(select(User).where(User.id == id))
-    if check_id.fetchall() and user_id and id != user_id:
-        res = await session.execute(
-            select(Folowers).where(
-                (Folowers.following_id == id)
-                & (Folowers.followers_id == user_id)
-            )
+    if check_id.fetchall() and id != user_id:
+        insert_into_followers = insert(Followers).values(
+            followers_id=user_id, following_id=id
         )
-        if not res.fetchall():
-            insert_into_folowers = insert(Folowers).values(
-                followers_id=user_id, following_id=id
-            )
-            await session.execute(insert_into_folowers)
-            await session.commit()
-            return {"result": True}
-        return JSONResponse(
-            content={
-                "message": "Can't add new follow. "
-                "You're already following this user."
-            },
-            status_code=404,
-        )
-    return JSONResponse(
-        content={"message": "Can't add new follow. Please check your data."},
-        status_code=404,
-    )
+        await session.execute(insert_into_followers)
+        await session.commit()
+        return {"result": True}
+    raise Exception("Can't add new follow. Please check your data.")
 
 
 @app_api.delete("/users/{id}/follow")
 async def unfollow(
     id: int,
-    api_key: str = Header("api-key"),
     session: AsyncSession = Depends(get_db_session),
+    user_id: int = Depends(check_api_key),
 ):
-    """отписаться от другого пользователя"""
-    user_id = await check_api_key(api_key, session)
-    if user_id:
-        await session.execute(
-            delete(Folowers).where(
-                (Folowers.followers_id == user_id)
-                & (Folowers.following_id == id)
-            )
+    """
+    Отписаться от другого пользователя.
+
+    ### Parameters:
+    - **id**: `int` - ID пользователя, от которого
+    отписывается текущий пользователь.
+    - **session**: `AsyncSession` - Сессия с текущей базой данных.
+    - **user_id**: `int` - id текущего пользователя,
+    возвращёный из check_api_key
+
+    ### Returns:
+    - `Response` объект с успешным статусом
+    или неуспешным и сообщением об ошибке.
+
+    """
+    await session.execute(
+        delete(Followers).where(
+            (Followers.followers_id == user_id)
+            & (Followers.following_id == id)
         )
-        await session.commit()
-        return {"result": True}
-    return JSONResponse(
-        content={"message": "Can't delete following. Please check your data."},
-        status_code=404,
     )
+    await session.commit()
+    return {"result": True}
 
 
 @app_api.post("/tweets/{id}/likes")
 async def like(
     id: int,
-    api_key: str = Header("api-key"),
     session: AsyncSession = Depends(get_db_session),
+    user_id: int = Depends(check_api_key),
 ):
-    """отмечать твит как понравившийся"""
-    user_id = await check_api_key(api_key, session)
-    check_id = await session.execute(select(Tweets.id).where(Tweets.id == id))
-    if check_id.fetchall() and user_id:
-        res = await session.execute(
-            select(Likes.id, Likes.tweet_id, Likes.likers_id).where(
-                (Likes.tweet_id == id) & (Likes.likers_id == user_id)
-            )
+    """
+    Отметить твит как понравившийся.
+
+    ### Parameters:
+        - **id**: `int` - ID твита, который лайкает текущий пльзователь.
+        - **session**: `AsyncSession` - Сессия с текущей базой данных.
+        - **user_id**: `int` - id текущего пользователя,
+        возвращёный из check_api_key
+
+    ### Returns:
+        - `Response` объект с успешным статусом
+        или неуспешным и сообщением об ошибке.
+    """
+    result = await session.execute(
+        select(Tweets, Likes)
+        .outerjoin(
+            Likes,
+            and_(Likes.tweet_id == Tweets.id, Likes.likers_id == user_id),
         )
-        if not res.fetchall():
-            insert_into_likes = insert(Likes).values(
-                tweet_id=id, likers_id=user_id
-            )
-            await session.execute(insert_into_likes)
-            await session.commit()
-            return {"result": True}
-        return JSONResponse(
-            content={
-                "message": "Can't add like. You're already liked this tweet."
-            },
-            status_code=404,
-        )
-    return JSONResponse(
-        content={"message": "Can't add like. Please check your data."},
-        status_code=404,
+        .where(Tweets.id == id)
     )
+    tweet, likes = result.first() or (None, None)
+
+    if tweet is None:
+        raise Exception("Can't add like. Please check your data.")
+    if likes is not None:
+        raise Exception("Can't add like. You're already liked this tweet.")
+
+    insert_into_likes = insert(Likes).values(tweet_id=id, likers_id=user_id)
+    await session.execute(insert_into_likes)
+    await session.commit()
+    return {"result": True}
 
 
 @app_api.delete("/tweets/{id}/likes")
 async def delete_like(
     id: int,
-    api_key: str = Header("api-key"),
     session: AsyncSession = Depends(get_db_session),
+    user_id: int = Depends(check_api_key),
 ):
-    """убрать отметку «Нравится»"""
-    user_id = await check_api_key(api_key, session)
-    if user_id:
-        await session.execute(
-            delete(Likes).where(
-                (Likes.likers_id == user_id) & (Likes.tweet_id == id)
-            )
+    """Убрать отметку «Нравится».
+
+    ### Parameters:
+        - **id**: `int` - ID твита, который дизлайкает текущий пльзователь.
+        - **session**: `AsyncSession` - Сессия с текущей базой данных.
+        - **user_id**: `int` - id текущего пользователя,
+        возвращёный из check_api_key
+
+    ### Returns:
+        - `Response` объект с успешным статусом
+        или неуспешным и сообщением об ошибке.
+    """
+    await session.execute(
+        delete(Likes).where(
+            (Likes.likers_id == user_id) & (Likes.tweet_id == id)
         )
-        await session.commit()
-        return {"result": True}
-    return JSONResponse(
-        content={"message": "Can't delete like. Please check your data."},
-        status_code=404,
     )
+    await session.commit()
+    return {"result": True}
 
 
 @app_api.get("/tweets")
 async def feed(
-    api_key: str = Header("api-key"),
     session: AsyncSession = Depends(get_db_session),
+    user_id: int = Depends(check_api_key),
 ):
-    """получить ленту из твитов отсортированных в
+    """
+    Получить ленту из твитов отсортированных в
     порядке убывания по популярности от пользователей, которых он
-    фоловит"""
+    фоловит.
 
-    user_id = await check_api_key(api_key, session)
-    if user_id:
-        subquery = (
-            select(Folowers.following_id)
-            .where(Folowers.followers_id == user_id)
-            .group_by(Folowers.following_id)
-            .order_by(func.count(Folowers.following_id).desc())
-            .scalar_subquery()
-        )
-        folowing_ = await session.execute(
-            select(
-                Tweets.id,
-                Tweets.content,
-                Tweets.attachments,
-                Tweets.author_id,
-                User.name,
-            )
-            .join(User, User.id == Tweets.author_id)
-            .order_by(
-                case([(Tweets.author_id.in_(subquery), 0)], else_=1),
-                Tweets.id.desc(),
-            )
-        )
-        folowing: list[Row] = folowing_.fetchall()
-        result: dict = {"result": True, "tweets": []}
-        for i in folowing:
-            list_ = []
-            if i[2]:
-                medias_ = await session.execute(
-                    select(Media.file).where(Media.id.in_(i[2]))
-                )
-                medias = medias_
-                print("medias1:", medias)
-                if medias:
-                    for j in medias:
-                        list_.append(os.path.join(DOWNLOADS, j[0]))
-            str = {
-                "id": i[0],
-                "content": i[1],
-                "attachments": list_,
-                "author": {"id": i[3], "name": i[4]},
-                "likes": [],
-            }
-            likes_ = await session.execute(
-                select(Likes.likers_id, User.name)
-                .join(User, User.id == Likes.likers_id)
-                .join(Tweets, Tweets.id == Likes.tweet_id)
-                .where(Tweets.id == i[0])
-            )
-            likes: list[Row] = likes_.fetchall()
-            if likes:
-                str["likes"].append(
-                    {"user_id": likes[0][0], "name": likes[0][1]}
-                )
-            result["tweets"].append(str)
-        return result
-    return JSONResponse(
-        content={"message": "Can't show tweets. Please check your data."},
-        status_code=404,
+
+    ### Parameters:
+        - **session**: `AsyncSession` - Сессия с текущей базой данных.
+        - **user_id**: `int` - id текущего пользователя,
+        возвращёный из check_api_key
+
+    ### Returns:
+        - `Response` объект с успешным статусом и
+        json со списком твитов для ленты этого пользователя,
+        или неуспешным и сообщением об ошибке.
+    """
+    author = aliased(User, name="user_1")
+    liker = aliased(User, name="user_2")
+
+    followers_count = func.count(Followers.followers_id).over(
+        partition_by=Tweets.author_id
     )
+    is_author_subscriber = and_(
+        Tweets.author_id == Followers.following_id,
+        user_id == Followers.followers_id,
+    )
+    sort_condition = case([(is_author_subscriber, followers_count)], else_=0)
+    secondary_sort_condition = case(
+        [(is_author_subscriber, 0)], else_=Tweets.id
+    )
+
+    complex_query = await session.execute(
+        select(
+            Tweets.id,
+            Tweets.content,
+            Tweets.attachments,
+            Tweets.author_id,
+            author.name.label("author_name"),
+            Media.file,
+            Likes.likers_id,
+            liker.name.label("liker_name"),
+            followers_count,
+        )
+        .outerjoin(Media, Media.id == any_(Tweets.attachments))
+        .outerjoin(Likes, Likes.tweet_id == Tweets.id)
+        .outerjoin(author, author.id == Tweets.author_id)
+        .outerjoin(liker, liker.id == Likes.likers_id)
+        .outerjoin(Followers, Followers.following_id == Tweets.author_id)
+        .group_by(
+            Tweets.id,
+            author.name,
+            Media.file,
+            Likes.likers_id,
+            liker.name,
+            Followers.followers_id,
+            Followers.following_id,
+            Media.id,
+        )
+        .order_by(
+            sort_condition.desc(),
+            secondary_sort_condition.desc(),
+            Media.id.asc(),
+        )
+    )
+    complex_data = complex_query.fetchall()
+
+    tweets_result = {}
+    for data in complex_data:
+        tweet_id = data[0]
+        if tweet_id not in tweets_result:
+            tweets_result[tweet_id] = {
+                "id": tweet_id,
+                "content": data[1],
+                "attachments": set(),
+                "author": {"id": data[3], "name": data[4]},
+                "likes": set(),
+            }
+        if DOWNLOADS is not None:
+            if data[5]:
+                tweets_result[tweet_id]["attachments"].add(
+                    os.path.join(DOWNLOADS, data[5])
+                )
+        else:
+            raise Exception('Check DOWNLOADS in .env')
+        if data[6]:
+            tweets_result[tweet_id]["likes"].add((data[6], data[7]))
+    for tweet_id, tweet_data in tweets_result.items():
+        tweet_data["attachments"] = list(tweet_data["attachments"])
+        tweet_data["likes"] = [
+            {"user_id": user_id, "name": name}
+            for user_id, name in tweet_data["likes"]
+        ]
+
+    result = {"result": True, "tweets": list(tweets_result.values())}
+    return result
 
 
 async def info_user(user_id: int, session: AsyncSession):
-    user_ = await session.execute(select(User.name).where(User.id == user_id))
-    user: list[Row] = user_.fetchall()
-    if user:
-        following_ = await session.execute(
-            select(Folowers.following_id, User.name)
-            .join(User, User.id == Folowers.following_id)
-            .where(Folowers.followers_id == user_id)
+    """
+    т.к /users/me и /users/{id} запрашивают примерно одни и те же данные,
+    просто /me запрашивает по id текущего пользователя, а  /{id} по id
+    другого пльзователя, то можно использовать одну функцию
+    для обработки таких запросов.
+    """
+    User_ = aliased(User, name="user_3")
+    Follower = aliased(User, name="user_4")
+    Following = aliased(User, name="user_5")
+    result = await session.execute(
+        select(
+            User_.name.label("user_name"),
+            Followers.following_id,
+            Follower.name.label("following_name"),
+            Followers.followers_id,
+            Following.name.label("followers_name"),
         )
-        following: list[Row] = following_.fetchall()
-        follows_ = await session.execute(
-            select(Folowers.followers_id, User.name)
-            .join(User, User.id == Folowers.followers_id)
-            .where(Folowers.following_id == user_id)
+        .select_from(User_)
+        .outerjoin(
+            Followers,
+            or_(
+                User_.id == Followers.followers_id,
+                User_.id == Followers.following_id,
+            ),
         )
-        follows: list[Row] = follows_.fetchall()
-        result: dict = {
+        .outerjoin(Follower, Followers.following_id == Follower.id)
+        .outerjoin(Following, Followers.followers_id == Following.id)
+        .where(User_.id == user_id)
+    )
+    rows = result.fetchall()
+    if rows:
+        user_info_def: dict = {
             "result": True,
             "user": {
                 "id": user_id,
-                "name": user[0][0],
+                "name": rows[0]["user_name"],
                 "followers": [],
                 "following": [],
             },
         }
-        for i in following:
-            if i[0] != user_id:
-                result["user"]["following"].append({"id": i[0], "name": i[1]})
-        for i in follows:
-            if i[0] != user_id:
-                result["user"]["followers"].append({"id": i[0], "name": i[1]})
-        return result
+        for row in rows:
+            if row["following_id"] and row["following_id"] != user_id:
+                user_info_def["user"]["following"].append(
+                    {"id": row["following_id"], "name": row["following_name"]}
+                )
+            if row["followers_id"] and row["followers_id"] != user_id:
+                user_info_def["user"]["followers"].append(
+                    {"id": row["followers_id"], "name": row["followers_name"]}
+                )
+        return user_info_def
     return False
 
 
 @app_api.get("/users/me")
 async def user_info(
-    api_key: str = Header("api-key"),
     session: AsyncSession = Depends(get_db_session),
+    user_id: int = Depends(check_api_key),
 ):
-    """получить информацию о своём профиле"""
-    user_id = await check_api_key(api_key, session)
-    if user_id:
-        return await info_user(user_id, session)
-    return JSONResponse(
-        content={"message": "Can't show users info. Please check your data."},
-        status_code=404,
-    )
+    """
+    Получить информацию о своём профиле.
+
+
+    ### Parameters:
+        - **session**: `AsyncSession` - Сессия с текущей базой данных.
+        - **user_id**: `int` - id текущего пользователя,
+        возвращёный из check_api_key
+
+    ### Returns:
+        - `Response` объект с успешным статусом и
+        json с информацией о текущем пользователе,
+        или неуспешным и сообщением об ошибке.
+    """
+    return await info_user(user_id, session)
 
 
 @app_api.get("/users/{id}")
 async def other_user_info(
     id: int,
-    api_key: str = Header("api-key"),
     session: AsyncSession = Depends(get_db_session),
+    user_id: int = Depends(check_api_key),
 ):
-    """получить информацию о произвольном профиле по его
-    id"""
-    user_id = await check_api_key(api_key, session)
-    if user_id:
-        res = await info_user(id, session)
-        if res:
-            return res
-        return JSONResponse(
-            content={
-                "message": "Can't show users info. Please check your data."
-            },
-            status_code=404,
-        )
-    return JSONResponse(
-        content={"message": "Can't show users info. Please check your data."},
-        status_code=404,
-    )
+    """
+    получить информацию о произвольном профиле по его
+    id.
+
+    ### Parameters:
+         - **id**: `int` - ID пользователя, информацию о котором
+         текущий пользователь хочет просмотреть.
+        - **session**: `AsyncSession` - Сессия с текущей базой данных.
+        - **user_id**: `int` - id текущего пользователя,
+        возвращёный из check_api_key
+
+    ### Returns:
+        - `Response` объект с успешным статусом и
+        json с информацией о другом пользователе,
+        или неуспешным и сообщением об ошибке.
+    """
+    res = await info_user(id, session)
+    if res:
+        return res
+    raise Exception("Can't show users info. Please check your data.")
