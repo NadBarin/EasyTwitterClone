@@ -1,10 +1,29 @@
-from sqlalchemy import ARRAY, Column, ForeignKey, Integer, String
+import os
+
+from dotenv import load_dotenv
+from sqlalchemy import (
+    ARRAY,
+    Column,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import relationship, sessionmaker
 
-DATABASE_URL = "postgresql+asyncpg://admin:admin@db:5432/db"
+load_dotenv()
+
+db_user = os.getenv("DB_USER")
+db_password = os.getenv("DB_PASSWORD")
+db_name = os.getenv("DB_NAME")
+db_port = os.getenv("DB_PORT")
+
+DATABASE_URL = (
+    f"postgresql+asyncpg://{db_user}:{db_password}@db:{db_port}/{db_name}"
+)
 engine = create_async_engine(DATABASE_URL, echo=True, pool_pre_ping=True)
 
 async_session = sessionmaker(
@@ -30,6 +49,10 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     api_key = Column(String, nullable=False, unique=True)
     name = Column(String, nullable=False)
+    # Отношения
+    media = relationship("Media", back_populates="user")
+    tweets = relationship("Tweets", back_populates="user")
+    likes = relationship("Likes", back_populates="user")
 
 
 class Media(Base):
@@ -39,19 +62,22 @@ class Media(Base):
     uploader_id = Column(
         Integer, ForeignKey("user.id", ondelete="CASCADE"), nullable=False
     )
+    # Отношения
+    user = relationship("User", back_populates="media")
 
 
-class Folowers(Base):
-    __tablename__ = "folowers"
-    id = Column(
-        Integer,
-        primary_key=True,
-    )
+class Followers(Base):
+    __tablename__ = "followers"
+    id = Column(Integer, primary_key=True)
     followers_id = Column(
         Integer, ForeignKey("user.id", ondelete="CASCADE"), nullable=False
     )
     following_id = Column(
         Integer, ForeignKey("user.id", ondelete="CASCADE"), nullable=False
+    )
+    # Уникальный составной индекс для предотвращения дублирования подписок
+    __table_args__ = (
+        UniqueConstraint("followers_id", "following_id", name="uix_1"),
     )
 
 
@@ -63,6 +89,9 @@ class Tweets(Base):
     author_id = Column(
         Integer, ForeignKey("user.id", ondelete="CASCADE"), nullable=False
     )
+    # Отношения
+    user = relationship("User", back_populates="tweets")
+    likes = relationship("Likes", back_populates="tweets")
 
 
 class Likes(Base):
@@ -74,3 +103,6 @@ class Likes(Base):
     likers_id = Column(
         Integer, ForeignKey("user.id", ondelete="CASCADE"), nullable=False
     )
+    # Отношения
+    user = relationship("User", back_populates="likes")
+    tweets = relationship("Tweets", back_populates="likes")
