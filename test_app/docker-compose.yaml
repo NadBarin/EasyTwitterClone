@@ -1,0 +1,18 @@
+version: '3.2'
+services:
+  test_db:
+    image: postgres:latest
+    restart: always
+    environment:
+      POSTGRES_USER: ${TEST_DB_USER}
+      POSTGRES_PASSWORD: ${TEST_DB_PASSWORD}
+      POSTGRES_DB: ${TEST_DB_NAME}
+
+    networks:
+      - network
+    ports:
+      - ${TEST_DB_PORT}:${DB_PORT}
+    volumes:
+      - ./test_db/:/var/lib/postgresql/data
+networks:
+  network:
