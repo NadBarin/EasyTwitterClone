@@ -211,14 +211,6 @@ async def delete_tweet(
     - `Response` объект с успешным статусом
     или неуспешным и сообщением об ошибке.
     """
-    '''tweet_to_delete = await session.get(Tweets, id)
-    if tweet_to_delete and tweet_to_delete.author_id == user_id:
-        attachments = tweet_to_delete.attachments
-        await session.execute(
-            delete(tweet_to_delete).where(
-                (tweet_to_delete.author_id == user_id) & (id == tweet_to_delete.id)
-            )
-        )'''
 
     attachments_ = await session.execute(
         delete(Tweets)
@@ -240,6 +232,7 @@ async def delete_tweet(
                 if DOWNLOADS is not None:
                     os.remove(os.path.join(DOWNLOADS, name))
             return {"result": True}
+        return {"result": True}
     else:
         raise Exception("Can't delete tweet. " "It's not yours or it's not exist.")
 

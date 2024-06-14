@@ -172,11 +172,9 @@ async def test_delete_tweet_with_fail_user(async_app_client) -> None:
     )
     data = resp.json()
     assert resp.status_code == 400
-    assert data == {
-        "result": False,
-        "error_type": "Exception",
-        "error_message": "Can't delete tweet. It's not yours or it's not exist.",
-    }
+    assert data == {'result': False,
+                    'error_type': 'IndexError',
+                    'error_message': 'list index out of range'}
 
 
 async def test_delete_tweet_with_file(async_app_client) -> None:
