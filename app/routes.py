@@ -32,7 +32,7 @@ DOWNLOADS: str | None = os.getenv("DOWNLOADS")
 
 @asynccontextmanager
 async def lifespan(
-    app: FastAPI, session: AsyncSession = Depends(get_db_session)
+        app: FastAPI, session: AsyncSession = Depends(get_db_session)
 ):  # pragma: no cover
     """Создаёт таблицу если её небыло,
     открывает и закрывает session и engine"""
@@ -77,8 +77,8 @@ app_api.middleware("http")(catch_exceptions_middleware)
 
 
 async def check_api_key(
-    api_key: str | None = Header("api-key"),
-    session: AsyncSession = Depends(get_db_session),
+        api_key: str | None = Header("api-key"),
+        session: AsyncSession = Depends(get_db_session),
 ):
     """
     Проверяет существует ли api-key.
@@ -103,9 +103,9 @@ async def check_api_key(
 
 @app_api.post("/tweets")
 async def add_new_tweet(
-    data: TweetCreate,
-    session: AsyncSession = Depends(get_db_session),
-    user_id: int = Depends(check_api_key),
+        data: TweetCreate,
+        session: AsyncSession = Depends(get_db_session),
+        user_id: int = Depends(check_api_key),
 ):
     """
     Добавить новый твит. Может содержать картинку.
@@ -152,9 +152,9 @@ async def add_new_tweet(
 
 @app_api.post("/medias")
 async def add_new_media(
-    file: UploadFile = File(...),
-    session: AsyncSession = Depends(get_db_session),
-    user_id: int = Depends(check_api_key),
+        file: UploadFile = File(...),
+        session: AsyncSession = Depends(get_db_session),
+        user_id: int = Depends(check_api_key),
 ):
     """
     Загрузить картинку для твита.
@@ -194,9 +194,9 @@ async def add_new_media(
 
 @app_api.delete("/tweets/{id}")
 async def delete_tweet(
-    id: int,
-    session: AsyncSession = Depends(get_db_session),
-    user_id: int = Depends(check_api_key),
+        id: int,
+        session: AsyncSession = Depends(get_db_session),
+        user_id: int = Depends(check_api_key),
 ):
     """
     Удалить свой твит вместе с вложенными файлами.
@@ -211,35 +211,44 @@ async def delete_tweet(
     - `Response` объект с успешным статусом
     или неуспешным и сообщением об ошибке.
     """
-    tweet_to_delete = await session.get(Tweets, id)
+    '''tweet_to_delete = await session.get(Tweets, id)
     if tweet_to_delete and tweet_to_delete.author_id == user_id:
         attachments = tweet_to_delete.attachments
         await session.execute(
-            delete(Tweets).where(
-                (Tweets.author_id == user_id) & (id == tweet_to_delete.id)
+            delete(tweet_to_delete).where(
+                (tweet_to_delete.author_id == user_id) & (id == tweet_to_delete.id)
             )
-        )
-        await session.commit()
-        if attachments:
+        )'''
+
+    attachments_ = await session.execute(
+        delete(Tweets)
+        .where((Tweets.author_id == user_id) & (id == Tweets.id))
+        .returning(Tweets.id, Tweets.attachments)
+    )
+    attachments = attachments_.all()
+    await session.commit()
+    if attachments[0][0]:
+        if attachments[0][1]:
             names = await session.execute(
-                select(Media.file).where(Media.id.in_(attachments))
+                select(Media.file).where(Media.id.in_(attachments[0][1]))
             )
             await session.execute(
-                delete(Media).where(Media.id.in_(attachments))
+                delete(Media).where(Media.id.in_(attachments[0][1]))
             )
             await session.commit()
             for name in names.scalars():
                 if DOWNLOADS is not None:
                     os.remove(os.path.join(DOWNLOADS, name))
-        return {"result": True}
-    raise Exception("Can't delete tweet. " "It's not yours or it's not exist.")
+            return {"result": True}
+    else:
+        raise Exception("Can't delete tweet. " "It's not yours or it's not exist.")
 
 
 @app_api.post("/users/{id}/follow")
 async def follow(
-    id: int,
-    session: AsyncSession = Depends(get_db_session),
-    user_id: int = Depends(check_api_key),
+        id: int,
+        session: AsyncSession = Depends(get_db_session),
+        user_id: int = Depends(check_api_key),
 ):
     """
      Зафоловить другого пользователя.
@@ -268,9 +277,9 @@ async def follow(
 
 @app_api.delete("/users/{id}/follow")
 async def unfollow(
-    id: int,
-    session: AsyncSession = Depends(get_db_session),
-    user_id: int = Depends(check_api_key),
+        id: int,
+        session: AsyncSession = Depends(get_db_session),
+        user_id: int = Depends(check_api_key),
 ):
     """
     Отписаться от другого пользователя.
@@ -299,9 +308,9 @@ async def unfollow(
 
 @app_api.post("/tweets/{id}/likes")
 async def like(
-    id: int,
-    session: AsyncSession = Depends(get_db_session),
-    user_id: int = Depends(check_api_key),
+        id: int,
+        session: AsyncSession = Depends(get_db_session),
+        user_id: int = Depends(check_api_key),
 ):
     """
     Отметить твит как понравившийся.
@@ -339,9 +348,9 @@ async def like(
 
 @app_api.delete("/tweets/{id}/likes")
 async def delete_like(
-    id: int,
-    session: AsyncSession = Depends(get_db_session),
-    user_id: int = Depends(check_api_key),
+        id: int,
+        session: AsyncSession = Depends(get_db_session),
+        user_id: int = Depends(check_api_key),
 ):
     """Убрать отметку «Нравится».
 
@@ -366,8 +375,8 @@ async def delete_like(
 
 @app_api.get("/tweets")
 async def feed(
-    session: AsyncSession = Depends(get_db_session),
-    user_id: int = Depends(check_api_key),
+        session: AsyncSession = Depends(get_db_session),
+        user_id: int = Depends(check_api_key),
 ):
     """
     Получить ленту из твитов отсортированных в
@@ -396,7 +405,12 @@ async def feed(
         user_id == Followers.followers_id,
     )
     sort_condition = case([(is_author_subscriber, followers_count)], else_=0)
+
     secondary_sort_condition = case(
+        [(is_author_subscriber, Tweets.id)], else_=0
+    )
+
+    third_sort_condition = case(
         [(is_author_subscriber, 0)], else_=Tweets.id
     )
 
@@ -430,6 +444,7 @@ async def feed(
         .order_by(
             sort_condition.desc(),
             secondary_sort_condition.desc(),
+            third_sort_condition.desc(),
             Media.id.asc(),
         )
     )
@@ -522,8 +537,8 @@ async def info_user(user_id: int, session: AsyncSession):
 
 @app_api.get("/users/me")
 async def user_info(
-    session: AsyncSession = Depends(get_db_session),
-    user_id: int = Depends(check_api_key),
+        session: AsyncSession = Depends(get_db_session),
+        user_id: int = Depends(check_api_key),
 ):
     """
     Получить информацию о своём профиле.
@@ -544,9 +559,9 @@ async def user_info(
 
 @app_api.get("/users/{id}")
 async def other_user_info(
-    id: int,
-    session: AsyncSession = Depends(get_db_session),
-    user_id: int = Depends(check_api_key),
+        id: int,
+        session: AsyncSession = Depends(get_db_session),
+        user_id: int = Depends(check_api_key),
 ):
     """
     получить информацию о произвольном профиле по его
